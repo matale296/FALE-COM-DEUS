@@ -1,0 +1,7 @@
+{
+  "name": "Fale com Deus",
+  "description": "Um espaço sagrado digital para reflexão, orientação e diálogo espiritual personalizado baseada na sua fé ou filosofia.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
