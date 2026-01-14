@@ -2,9 +2,14 @@ import { GoogleGenAI, Chat, Part, Content } from "@google/genai";
 import { Religion } from '../types';
 
 const getClient = () => {
+  const apiKey = process.env.API_KEY;
+  
+  if (!apiKey || apiKey === '' || apiKey === 'undefined') {
+      throw new Error("API_KEY_MISSING");
+  }
+
   // Initialize the client using the API key from the environment variable directly.
-  // Assumption: process.env.API_KEY is pre-configured and valid.
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  return new GoogleGenAI({ apiKey: apiKey });
 };
 
 const getSystemInstruction = (religion: Religion): string => {
@@ -51,6 +56,12 @@ export const generateReflection = async (religion: Religion): Promise<string> =>
   } catch (error: any) {
     // Only log full error if it's not a known auth issue to keep console clean
     const msg = error?.message || String(error);
+    
+    if (msg.includes('API_KEY_MISSING')) {
+         console.error("CRITICAL: API Key is missing. Please configure it in your Vercel Project Settings.");
+         return "Configure sua Chave de API no painel da Vercel para receber mensagens.";
+    }
+
     if (!msg.includes('leaked') && !msg.includes('403')) {
         console.error("Error generating reflection:", error);
     } else {

@@ -200,13 +200,18 @@ const App: React.FC = () => {
       
       try {
         initChat(religion, []);
-      } catch (error) {
+      } catch (error: any) {
         console.error("Failed to init chat", error);
-        // Show friendly error in chat instead of crashing
+        
+        let msg = "Não foi possível conectar.";
+        if (error?.message?.includes('API_KEY_MISSING')) {
+            msg = "ERRO DE CONFIGURAÇÃO: Chave de API não encontrada. Configure a API_KEY no painel da Vercel.";
+        }
+
         setMessages([{
             id: 'init-error',
             role: 'model',
-            text: "Não foi possível conectar ao servidor. Verifique se a Chave de API está configurada corretamente.",
+            text: msg,
             timestamp: new Date(),
             isError: true
         }]);
@@ -242,8 +247,11 @@ const App: React.FC = () => {
       
       try {
         initChat(newReligion, []);
-      } catch (e) {
+      } catch (e: any) {
         console.error("Init chat failed", e);
+         if (e?.message?.includes('API_KEY_MISSING')) {
+             alert("Chave de API não configurada na Vercel.");
+         }
       }
       loadReflection(newReligion);
       
@@ -287,12 +295,23 @@ const App: React.FC = () => {
   }, [messages]);
 
   const handleSendMessage = async (text: string, audio?: { data: string; mimeType: string }) => {
+    // Check if chat needs init (e.g. if previous init failed)
     if (!chatInstance.current) {
-        // Try to re-init if instance is missing
         try {
             initChat(selectedReligion, messages);
-        } catch(e) {
-            console.error("Cannot send message, chat not initialized");
+        } catch(e: any) {
+             console.error("Cannot send message, chat not initialized");
+             const errorText = e?.message?.includes('API_KEY_MISSING') 
+                ? "Erro: Configure a API_KEY nas variáveis de ambiente da Vercel."
+                : "Não foi possível conectar ao servidor.";
+                
+             setMessages(prev => [...prev, {
+                id: Date.now().toString(),
+                role: 'model',
+                text: errorText,
+                timestamp: new Date(),
+                isError: true
+             }]);
             return;
         }
     }
@@ -338,12 +357,14 @@ const App: React.FC = () => {
       
       let errorMessage = "Desculpe, houve uma desconexão espiritual momentânea. Por favor, tente novamente.";
       
-      // Enhanced error detection for Leaked API Keys or Permission issues
+      // Enhanced error detection
       const errString = String(error).toLowerCase();
       const errMsg = error?.message?.toLowerCase() || '';
       
-      if (errString.includes('leaked') || errMsg.includes('leaked') || errString.includes('permission_denied') || errMsg.includes('permission_denied')) {
-        errorMessage = "Acesso negado: Sua Chave de API foi bloqueada por segurança (relatada como vazada) ou é inválida. Por favor, gere uma nova chave no Google AI Studio.";
+      if (errMsg.includes('api_key_missing')) {
+          errorMessage = "Configuração necessária: Adicione sua API_KEY nas configurações do projeto na Vercel (Settings > Environment Variables) e faça um novo deploy.";
+      } else if (errString.includes('leaked') || errMsg.includes('leaked') || errString.includes('permission_denied') || errMsg.includes('permission_denied')) {
+        errorMessage = "Acesso negado: Sua Chave de API foi bloqueada ou é inválida. Gere uma nova chave no Google AI Studio.";
       }
 
       setMessages(prev => [...prev, {
