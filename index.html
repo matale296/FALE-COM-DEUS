@@ -28,6 +28,16 @@
       ::-webkit-scrollbar-thumb:hover {
         background: rgba(99, 102, 241, 0.5); 
       }
+      
+      /* Subtle Pulse Animation for Generating Messages */
+      @keyframes subtle-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.92; transform: scale(0.995); }
+      }
+      .animate-subtle-pulse {
+        animation: subtle-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        will-change: opacity, transform;
+      }
     </style>
     <script>
       // Polyfill for process.env to prevent "process is not defined" crash in browser

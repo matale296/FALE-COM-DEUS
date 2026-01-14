@@ -6,8 +6,9 @@ import ChatMessage from './components/ChatMessage';
 import ChatInput from './components/ChatInput';
 import ReligionSelector from './components/ReligionSelector';
 import DailyReflection from './components/DailyReflection';
-import { Chat, GenerateContentResponse } from '@google/genai';
-import { History, Trash2, ArrowRight, Palette, X, MessageSquare, Menu } from 'lucide-react';
+import WelcomeScreen from './components/WelcomeScreen';
+import { Chat, GenerateContentResponse, Content } from '@google/genai';
+import { History, Trash2, ArrowRight, Palette, X, MessageSquare, Menu, LogOut } from 'lucide-react';
 
 const App: React.FC = () => {
   // State
@@ -16,11 +17,31 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [reflection, setReflection] = useState<string>("");
   const [reflectionLoading, setReflectionLoading] = useState(false);
-  const [currentThemeId, setCurrentThemeId] = useState<ThemeId>(ThemeId.SERENE);
+  
+  // Theme State Initialization with System Preference Detection
+  const [currentThemeId, setCurrentThemeId] = useState<ThemeId>(() => {
+    try {
+      // 1. Check user preference in LocalStorage
+      const savedTheme = localStorage.getItem('app_theme');
+      if (savedTheme && Object.values(ThemeId).includes(savedTheme as ThemeId)) {
+        return savedTheme as ThemeId;
+      }
+      // 2. Check System Dark Mode Preference
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return ThemeId.NOCTURNAL;
+      }
+    } catch (e) {
+      console.warn("Could not access localStorage or matchMedia", e);
+    }
+    // 3. Default
+    return ThemeId.SERENE;
+  });
   
   // UI State
+  const [showWelcome, setShowWelcome] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isAppReady, setIsAppReady] = useState(false);
   
   // Session History State
   const [history, setHistory] = useState<ChatSession[]>([]);
@@ -33,18 +54,40 @@ const App: React.FC = () => {
   const theme = THEMES[currentThemeId];
   const colors = theme.colors;
 
-  // Initialize Chat
-  const initChat = (religion: Religion) => {
-    chatInstance.current = GeminiService.startChatSession(religion);
-    const config = RELIGIONS.find(r => r.id === religion);
+  // Initialize Chat (helper)
+  const initChat = (religion: Religion, existingMessages: Message[] = []) => {
+    // Convert Message[] to Gemini Content format for history
+    const geminiHistory: Content[] = existingMessages
+      .filter(m => !m.isError) // Exclude error messages from context
+      .map(m => {
+        const parts = [];
+        if (m.audio) {
+            parts.push({ inlineData: { mimeType: m.mimeType || 'audio/webm', data: m.audio } });
+        }
+        if (m.text) {
+            parts.push({ text: m.text });
+        }
+        // If message has no content, fallback to empty text to avoid crashes
+        if (parts.length === 0) parts.push({ text: '...' });
+
+        return {
+           role: m.role,
+           parts: parts
+        };
+      });
+
+    chatInstance.current = GeminiService.startChatSession(religion, geminiHistory);
     
-    // Add initial greeting from the system (simulated)
-    setMessages([{
-      id: 'init-1',
-      role: 'model',
-      text: config ? config.greeting : 'Olá, estou aqui para ouvir você.',
-      timestamp: new Date()
-    }]);
+    // Only add greeting if we are starting fresh
+    if (existingMessages.length === 0) {
+        const config = RELIGIONS.find(r => r.id === religion);
+        setMessages([{
+            id: 'init-1',
+            role: 'model',
+            text: config ? config.greeting : 'Olá, estou aqui para ouvir você.',
+            timestamp: new Date()
+        }]);
+    }
   };
 
   // Load Reflection
@@ -55,28 +98,13 @@ const App: React.FC = () => {
     setReflectionLoading(false);
   };
 
-  // Setup on Mount and Religion Change
+  // INITIALIZATION
   useEffect(() => {
-    // If there is an existing conversation when switching religion, save it to history?
-    // For now, we just reset or keep context. Let's restart context for new religion.
-    // If user has typed messages, save to history before switching.
-    if (messages.length > 1) { 
-       addToHistory(messages, selectedReligion);
-    }
-
-    initChat(selectedReligion);
-    loadReflection(selectedReligion);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedReligion]);
-
-  // Load history from local storage
-  useEffect(() => {
-    const saved = localStorage.getItem('chat_history');
-    const savedTheme = localStorage.getItem('app_theme');
-    if (saved) {
+    // 1. Load History
+    const savedHistory = localStorage.getItem('chat_history');
+    if (savedHistory) {
       try {
-        const parsed = JSON.parse(saved);
-        // Rehydrate dates
+        const parsed = JSON.parse(savedHistory);
         const hydrated = parsed.map((s: any) => ({
             ...s,
             date: new Date(s.date),
@@ -87,24 +115,116 @@ const App: React.FC = () => {
         console.error("Failed to parse history", e);
       }
     }
-    if (savedTheme && Object.values(ThemeId).includes(savedTheme as ThemeId)) {
-        setCurrentThemeId(savedTheme as ThemeId);
+
+    // Theme is now loaded in useState initializer
+
+    // 2. Load Active Session OR Preferred Religion
+    const activeSession = localStorage.getItem('active_session');
+    let restoredSession = false;
+    
+    if (activeSession) {
+        try {
+            const parsed = JSON.parse(activeSession);
+            if (parsed.messages && parsed.messages.length > 0) {
+                const rehydratedMessages = parsed.messages.map((m: any) => ({
+                    ...m, 
+                    timestamp: new Date(m.timestamp)
+                }));
+                const religion = parsed.religion || Religion.UNIVERSAL;
+                
+                // Restore state and Skip Welcome
+                setMessages(rehydratedMessages);
+                setSelectedReligion(religion);
+                initChat(religion, rehydratedMessages);
+                loadReflection(religion);
+                setShowWelcome(false);
+                restoredSession = true;
+            }
+        } catch (e) {
+            console.error("Failed to restore active session", e);
+        }
     }
+
+    if (!restoredSession) {
+        // If no active session, check for preferred religion to pre-select or default
+        const preferred = localStorage.getItem('preferred_religion');
+        if (preferred && Object.values(Religion).includes(preferred as Religion)) {
+            setSelectedReligion(preferred as Religion);
+        }
+        // We stay on Welcome Screen (showWelcome is true by default)
+    }
+    
+    setIsAppReady(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save history to local storage whenever it changes
+  // PERSISTENCE: Save Active Session
+  useEffect(() => {
+    if (!isAppReady) return;
+    
+    // If on welcome screen, don't save active session (or clear it if we wanted to be strict)
+    if (showWelcome) return;
+
+    localStorage.setItem('active_session', JSON.stringify({
+        messages,
+        religion: selectedReligion
+    }));
+  }, [messages, selectedReligion, isAppReady, showWelcome]);
+
+  // PERSISTENCE: Save History
   useEffect(() => {
     localStorage.setItem('chat_history', JSON.stringify(history));
   }, [history]);
 
-  // Save theme
+  // ACTION: Start Chat from Welcome Screen
+  const handleStartFromWelcome = (religion: Religion) => {
+      setSelectedReligion(religion);
+      localStorage.setItem('preferred_religion', religion); // Persist choice
+      
+      // Clean start
+      setMessages([]);
+      initChat(religion, []);
+      loadReflection(religion);
+      
+      setShowWelcome(false);
+  };
+
+  // ACTION: Return to Home/Welcome (End Session)
+  const handleExitChat = () => {
+      // Archive session if valid
+      if (messages.length > 1) {
+          addToHistory(messages, selectedReligion);
+      }
+      // Clear active session from storage
+      localStorage.removeItem('active_session');
+      setMessages([]);
+      setShowWelcome(true);
+      setIsMobileMenuOpen(false);
+  };
+
+  // Handle Religion Change from Sidebar
+  const handleReligionChange = (newReligion: Religion) => {
+      if (newReligion === selectedReligion) return;
+
+      if (messages.length > 1) { 
+         addToHistory(messages, selectedReligion);
+      }
+
+      setSelectedReligion(newReligion);
+      localStorage.setItem('preferred_religion', newReligion); // Update persistence
+      setMessages([]); 
+      initChat(newReligion, []);
+      loadReflection(newReligion);
+      
+      if(window.innerWidth < 768) setIsMobileMenuOpen(false);
+  };
+
   const changeTheme = (id: ThemeId) => {
       setCurrentThemeId(id);
       localStorage.setItem('app_theme', id);
   };
 
   const addToHistory = (msgs: Message[], rel: Religion) => {
-     // Only save if there is real conversation
      const userMsgs = msgs.filter(m => m.role === 'user');
      if (userMsgs.length === 0) return;
 
@@ -117,7 +237,6 @@ const App: React.FC = () => {
        messages: msgs
      };
      setHistory(prev => {
-        // Avoid duplicates if saving same session
         const existingIndex = prev.findIndex(s => s.messages[0].timestamp.getTime() === msgs[0].timestamp.getTime());
         if (existingIndex >= 0) {
             const updated = [...prev];
@@ -139,7 +258,6 @@ const App: React.FC = () => {
   const handleSendMessage = async (text: string, audio?: { data: string; mimeType: string }) => {
     if (!chatInstance.current) return;
 
-    // Add user message
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -152,10 +270,8 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Use the service helper to handle text or audio
       const result = await GeminiService.sendMessage(chatInstance.current, text, audio);
       
-      // Placeholder for AI response
       const aiMsgId = (Date.now() + 1).toString();
       setMessages(prev => [...prev, {
         id: aiMsgId,
@@ -191,17 +307,17 @@ const App: React.FC = () => {
   };
 
   const loadHistorySession = (session: ChatSession) => {
-      // Save current if needed
       if (messages.length > 1) {
           addToHistory(messages, selectedReligion);
       }
+      
       setSelectedReligion(session.religion);
-      // Small timeout to allow religion state to update before setting messages
-      setTimeout(() => {
-          setMessages(session.messages);
-          setIsHistoryOpen(false);
-          setIsMobileMenuOpen(false); // Close mobile menu if open
-      }, 50);
+      setMessages(session.messages);
+      initChat(session.religion, session.messages);
+      
+      setIsHistoryOpen(false);
+      setIsMobileMenuOpen(false);
+      setShowWelcome(false); // Ensure we leave welcome screen
   };
   
   const clearHistory = () => {
@@ -214,6 +330,18 @@ const App: React.FC = () => {
       setHistory(prev => prev.filter(s => s.id !== id));
   };
 
+  // RENDER: WELCOME SCREEN
+  if (showWelcome && isAppReady) {
+      return (
+          <WelcomeScreen 
+            onSelect={handleStartFromWelcome} 
+            theme={theme} 
+            initialSelected={selectedReligion} 
+          />
+      );
+  }
+
+  // RENDER: CHAT INTERFACE
   return (
     <div className={`flex h-screen ${colors.bgApp} relative overflow-hidden transition-colors duration-500`}>
       
@@ -233,8 +361,13 @@ const App: React.FC = () => {
 
         <div className="flex-1 overflow-y-auto px-4 py-6 md:px-12 md:py-8 custom-scrollbar">
           <div className="max-w-3xl mx-auto">
-            {messages.map(msg => (
-              <ChatMessage key={msg.id} message={msg} theme={theme} />
+            {messages.map((msg, index) => (
+              <ChatMessage 
+                key={msg.id} 
+                message={msg} 
+                theme={theme} 
+                isGenerating={isLoading && index === messages.length - 1 && msg.role === 'model'}
+              />
             ))}
             {isLoading && (
               <div className={`flex items-center gap-2 ${colors.textMuted} text-sm ml-4 mb-4 animate-pulse`}>
@@ -271,16 +404,7 @@ const App: React.FC = () => {
         flex flex-col transition-transform duration-300 shadow-2xl md:shadow-none
         ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full'} md:translate-x-0 md:static md:block
       `}>
-        {/* Mobile Close Button */}
-        <div className="md:hidden absolute top-4 right-4 z-50">
-            <button 
-                onClick={() => setIsMobileMenuOpen(false)}
-                className={`p-2 rounded-full ${colors.bgApp} shadow-sm text-slate-500`}
-            >
-                <X size={20} />
-            </button>
-        </div>
-
+        {/* Sidebar Content */}
         <div className="h-full flex flex-col p-6 overflow-y-auto custom-scrollbar">
           
           <div className="flex justify-between items-center mb-6 pt-2 md:pt-0">
@@ -290,13 +414,30 @@ const App: React.FC = () => {
             {/* On mobile, we show 'Configurações' title instead of app title in sidebar */}
             <h2 className={`md:hidden text-xl font-serif font-bold ${colors.textMain}`}>Caminho Espiritual</h2>
 
-            <button 
-                onClick={() => setIsHistoryOpen(true)}
-                className={`p-2 ${colors.textMuted} hover:text-indigo-600 hover:bg-slate-100/50 rounded-full transition-colors`}
-                title="Ver Histórico"
-            >
-                <History size={20} />
-            </button>
+            <div className="flex items-center gap-2">
+                <button 
+                    onClick={() => setIsHistoryOpen(true)}
+                    className={`p-2 ${colors.textMuted} hover:text-indigo-600 hover:bg-slate-100/50 rounded-full transition-colors`}
+                    title="Ver Histórico"
+                >
+                    <History size={20} />
+                </button>
+                <button
+                    onClick={handleExitChat}
+                    className={`p-2 ${colors.textMuted} hover:text-red-600 hover:bg-red-50 rounded-full transition-colors`}
+                    title="Sair para o Início"
+                >
+                    <LogOut size={20} />
+                </button>
+
+                {/* Mobile Close Button (Inside header to avoid overlap) */}
+                <button 
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className={`md:hidden p-2 rounded-full ${colors.textSecondary} hover:bg-black/5`}
+                >
+                    <X size={20} />
+                </button>
+            </div>
           </div>
 
           {/* Theme Selector */}
@@ -329,7 +470,7 @@ const App: React.FC = () => {
           </div>
 
           <div className="mb-8">
-            <ReligionSelector selected={selectedReligion} onSelect={(r) => { setSelectedReligion(r); if(window.innerWidth < 768) setIsMobileMenuOpen(false); }} theme={theme} />
+            <ReligionSelector selected={selectedReligion} onSelect={handleReligionChange} theme={theme} />
           </div>
 
           <div>

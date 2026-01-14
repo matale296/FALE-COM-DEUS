@@ -1,4 +1,4 @@
-import { GoogleGenAI, Chat, Part } from "@google/genai";
+import { GoogleGenAI, Chat, Part, Content } from "@google/genai";
 import { Religion } from '../types';
 
 const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -24,14 +24,15 @@ const getSystemInstruction = (religion: Religion): string => {
   return `${base}\n\nContexto Atual: O usuário selecionou a visão: ${religion}. ${specificInstructions[religion]} \n\nRegras:\n1. Nunca julgue.\n2. Seja breve mas profundo.\n3. Sempre valide os sentimentos do usuário primeiro.\n4. Termine com uma palavra de esperança ou encorajamento.`;
 };
 
-export const startChatSession = (religion: Religion): Chat => {
+export const startChatSession = (religion: Religion, history: Content[] = []): Chat => {
   const ai = getClient();
   return ai.chats.create({
     model: 'gemini-2.5-flash',
     config: {
       systemInstruction: getSystemInstruction(religion),
       temperature: 0.7, // Slightly creative/warm
-    }
+    },
+    history: history
   });
 };
 
