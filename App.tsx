@@ -93,9 +93,16 @@ const App: React.FC = () => {
   // Load Reflection
   const loadReflection = async (religion: Religion) => {
     setReflectionLoading(true);
-    const text = await GeminiService.generateReflection(religion);
-    setReflection(text);
-    setReflectionLoading(false);
+    try {
+      const text = await GeminiService.generateReflection(religion);
+      setReflection(text);
+    } catch (e: any) {
+      console.error("Reflection failed", e);
+      // Fallback text is handled in the service, but if it bubbles up:
+      setReflection("A paz começa dentro de você.");
+    } finally {
+      setReflectionLoading(false);
+    }
   };
 
   // INITIALIZATION
@@ -135,7 +142,13 @@ const App: React.FC = () => {
                 // Restore state and Skip Welcome
                 setMessages(rehydratedMessages);
                 setSelectedReligion(religion);
-                initChat(religion, rehydratedMessages);
+                
+                try {
+                  initChat(religion, rehydratedMessages);
+                } catch (e) {
+                  console.error("Failed to restore chat session", e);
+                }
+                
                 loadReflection(religion);
                 setShowWelcome(false);
                 restoredSession = true;
@@ -181,12 +194,25 @@ const App: React.FC = () => {
       setSelectedReligion(religion);
       localStorage.setItem('preferred_religion', religion); // Persist choice
       
-      // Clean start
-      setMessages([]);
-      initChat(religion, []);
-      loadReflection(religion);
-      
+      // Critical Fix: Update UI state BEFORE attempting logic that might fail (API calls)
       setShowWelcome(false);
+      setMessages([]);
+      
+      try {
+        initChat(religion, []);
+      } catch (error) {
+        console.error("Failed to init chat", error);
+        // Show friendly error in chat instead of crashing
+        setMessages([{
+            id: 'init-error',
+            role: 'model',
+            text: "Não foi possível conectar ao servidor. Verifique se a Chave de API está configurada corretamente.",
+            timestamp: new Date(),
+            isError: true
+        }]);
+      }
+      
+      loadReflection(religion).catch(e => console.error(e));
   };
 
   // ACTION: Return to Home/Welcome (End Session)
@@ -213,7 +239,12 @@ const App: React.FC = () => {
       setSelectedReligion(newReligion);
       localStorage.setItem('preferred_religion', newReligion); // Update persistence
       setMessages([]); 
-      initChat(newReligion, []);
+      
+      try {
+        initChat(newReligion, []);
+      } catch (e) {
+        console.error("Init chat failed", e);
+      }
       loadReflection(newReligion);
       
       if(window.innerWidth < 768) setIsMobileMenuOpen(false);
@@ -256,6 +287,16 @@ const App: React.FC = () => {
   }, [messages]);
 
   const handleSendMessage = async (text: string, audio?: { data: string; mimeType: string }) => {
+    if (!chatInstance.current) {
+        // Try to re-init if instance is missing
+        try {
+            initChat(selectedReligion, messages);
+        } catch(e) {
+            console.error("Cannot send message, chat not initialized");
+            return;
+        }
+    }
+    
     if (!chatInstance.current) return;
 
     const userMsg: Message = {
@@ -292,12 +333,23 @@ const App: React.FC = () => {
         }
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
+      
+      let errorMessage = "Desculpe, houve uma desconexão espiritual momentânea. Por favor, tente novamente.";
+      
+      // Enhanced error detection for Leaked API Keys or Permission issues
+      const errString = String(error).toLowerCase();
+      const errMsg = error?.message?.toLowerCase() || '';
+      
+      if (errString.includes('leaked') || errMsg.includes('leaked') || errString.includes('permission_denied') || errMsg.includes('permission_denied')) {
+        errorMessage = "Acesso negado: Sua Chave de API foi bloqueada por segurança (relatada como vazada) ou é inválida. Por favor, gere uma nova chave no Google AI Studio.";
+      }
+
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'model',
-        text: "Desculpe, houve uma desconexão espiritual momentânea. Por favor, tente novamente.",
+        text: errorMessage,
         timestamp: new Date(),
         isError: true
       }]);
@@ -313,7 +365,12 @@ const App: React.FC = () => {
       
       setSelectedReligion(session.religion);
       setMessages(session.messages);
-      initChat(session.religion, session.messages);
+      
+      try {
+        initChat(session.religion, session.messages);
+      } catch (e) {
+        console.error(e);
+      }
       
       setIsHistoryOpen(false);
       setIsMobileMenuOpen(false);

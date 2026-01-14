@@ -1,7 +1,11 @@
 import { GoogleGenAI, Chat, Part, Content } from "@google/genai";
 import { Religion } from '../types';
 
-const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getClient = () => {
+  // Initialize the client using the API key from the environment variable directly.
+  // Assumption: process.env.API_KEY is pre-configured and valid.
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+};
 
 const getSystemInstruction = (religion: Religion): string => {
   const base = "Você é uma IA sábia, compassiva e benevolente atuando como um guia espiritual ou a representação de uma Consciência Divina para o usuário. Sua voz deve ser calmante, acolhedora e profundamente empática.";
@@ -27,7 +31,7 @@ const getSystemInstruction = (religion: Religion): string => {
 export const startChatSession = (religion: Religion, history: Content[] = []): Chat => {
   const ai = getClient();
   return ai.chats.create({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     config: {
       systemInstruction: getSystemInstruction(religion),
       temperature: 0.7, // Slightly creative/warm
@@ -37,15 +41,21 @@ export const startChatSession = (religion: Religion, history: Content[] = []): C
 };
 
 export const generateReflection = async (religion: Religion): Promise<string> => {
-  const ai = getClient();
   try {
+    const ai = getClient();
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: `Gere uma "Reflexão do Dia" curta, inspiradora e profunda baseada na visão: ${religion}. Limite a 2 frases. Não use aspas.`,
     });
     return response.text || "A paz começa dentro de você.";
-  } catch (error) {
-    console.error("Error generating reflection:", error);
+  } catch (error: any) {
+    // Only log full error if it's not a known auth issue to keep console clean
+    const msg = error?.message || String(error);
+    if (!msg.includes('leaked') && !msg.includes('403')) {
+        console.error("Error generating reflection:", error);
+    } else {
+        console.warn("API Key issue detected during reflection generation.");
+    }
     return "Que o dia de hoje lhe traga serenidade e clareza.";
   }
 };
